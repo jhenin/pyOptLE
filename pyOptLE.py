@@ -1,16 +1,110 @@
 import numpy as np
 import numba as nb
 from scipy.optimize import minimize
+import matplotlib.pyplot as plt
+import time
 
 
-# TODO pass dt
-dt = 0.1
-RT = 1.
-beta = 1/RT
+def V_harm(x):
+    k = 10.0
+    return 0.5 * k * (x**2)
+
+def nablaV_harm(x):
+    k = 10.0
+    return k * x
+
+def V_dblwell(x):
+    A = 0.05
+    B = 1.2
+    x2 = x**2
+    return A * x2**2 - B * x2
+
+def nablaV_dblwell(x):
+    A = 0.05
+    B = 1.2
+    return 4. * A * x**3 - 2. * B * x
+
+def overdamped_Langevin(n, N, dt, beta = 1, D = .1, nablaV = nablaV_harm):
+    
+    np.random.seed(1)
+
+    # Start out of equilibrium
+    x = np.zeros([n, N])
+
+    x[:,0] = np.zeros(n) + np.random.normal(0, np.sqrt(2.*D*dt), size=n)
+    for t in range(1,N):
+        x[:,t] = x[:,t-1] - beta * D * nablaV(x[:,t-1]) * dt + np.random.normal(0, np.sqrt(2.*D*dt), size=n)
+    return x
 
 
-# WARNING - assumes fixed-size arrays
-# Need to re-run cell each time data sizes change to recompile JIT
+def load_traj(filename):
+    # TODO handle case of separate traj files
+    # Using colvars_traj module
+
+    raw = np.loadtxt(filename)
+    assert raw.shape[1] >= 2 and raw.shape[1] <= 3
+    has_f = (raw.shape[1] == 3)
+
+    t = 0
+    old_t = 0
+    q = list()
+    f = list() if has_f else None
+    qi = list()
+    if has_f:
+        fi = list()
+
+    for r in raw:
+        if r[0] < old_t:
+            # Start new trajectory
+            q.append(np.array(qi))
+            qi = list()
+            if has_f:
+                f.append(np.array(fi))
+                fi = list()
+        qi.append(r[1])
+        if has_f:
+            fi.append(r[2])
+        old_t = r[0]
+
+    # Add last trajectory
+    q.append(np.array(qi))
+    if has_f:
+        f.append(np.array(fi))
+
+    return q, f
+
+
+def history(res):
+    history.opt.append(res)
+    if history.nsteps%100 == 0:
+        print('Step', history.nsteps, np.square(res).sum())
+    history.nsteps += 1
+
+
+def optimize_model(initial_params, knots, q, deltaq, f, dt=1, T=300, RT=None):
+    # kcal/mol
+    R = 0.00198720425864
+    if RT is not None:
+        RT = 1.
+    else:
+        RT = R * T
+    beta = 1 / RT
+
+    history.opt = list()
+    history.nsteps = 0
+
+    start_time = time.time()
+    # Minimize the objective function using L-BFGS-B algorithm
+    result = minimize(objective_order1_debiased, initial_params,  args=(knots, q, deltaq, dt, beta, f), jac=True, method='L-BFGS-B', callback=history)
+    print("--- %s seconds ---" % (time.time() - start_time))
+
+    print(result.nit, result.message)
+
+
+# WARNING - assumes fixed-size arrays - need to re-run cell each time data sizes change to recompile JIT
+# What happens once this is in a module?
+
+# TODO do search only once and pass indexes, h values
 
 @nb.njit(parallel=False)
 def linear_interpolation_with_gradient(x, xp, fp):
@@ -40,11 +134,24 @@ def linear_interpolation_with_gradient(x, xp, fp):
 
 
 @nb.njit(parallel=True)
-def objective(params, q, deltaq, f, knots):
+def objective_order1_debiased(params, knots, q, deltaq, dt, beta, f):
+    """Objective function: order-1 OptLE for overdamped Langevin, order-1 propagator
+    Includes the debiasing feature of Hallegot, Pietrucci and Hénin for time-dependent biases
 
+    Args:
+        params (ndarray): parameters of the model - piecewise-linear grad F (free energy) and log D
+        knots (ndarray): CV values forming the knots of the piecewise-linear approximation of logD and gradF
+        q (list of ndarray): trajectories of the CV
+        deltaq (list of ndarray): trajectories of CV differences
+        f (list of ndarray): trajectories of the biasing force
+
+    Returns:
+        real, ndarray: objective function and its derivatives with respect to model parameters
+    """
+
+    dim = params.shape[0]//2
     # Accumulators
     logL = 0.0
-    dim = params.shape[0]//2
     dlogLdklD = np.zeros(dim)
     dlogLdkG = np.zeros(dim)
 
