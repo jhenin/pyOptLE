@@ -37,40 +37,47 @@ def overdamped_Langevin(n, N, dt, beta = 1, D = .1, nablaV = nablaV_harm):
     return x
 
 
-def load_traj(filename):
+def load_traj(filenames):
     # TODO handle case of separate traj files
     # Using plot_colvar_traj module
 
-    raw = np.loadtxt(filename)
-    assert raw.shape[1] >= 2 and raw.shape[1] <= 3
-    has_f = (raw.shape[1] == 3)
+    if type(filenames) == str:
+        filenames = [filenames]
 
-    t = 0
-    old_t = 0
     q = list()
-    f = list() if has_f else None
-    qi = list()
-    if has_f:
-        fi = list()
+    f = list()
 
-    for r in raw:
-        if r[0] < old_t:
-            # Start new trajectory
-            q.append(np.array(qi))
-            qi = list()
-            if has_f:
-                f.append(np.array(fi))
-                fi = list()
-        qi.append(r[1])
+    for filename in filenames:
+        raw = np.loadtxt(filename)
+        assert raw.shape[1] >= 2 and raw.shape[1] <= 3
+        has_f = (raw.shape[1] == 3)
+
+        t = 0
+        old_t = 0
+
+        qi = list()
         if has_f:
-            fi.append(r[2])
-        old_t = r[0]
+            fi = list()
 
-    # Add last trajectory
-    q.append(np.array(qi))
-    if has_f:
-        f.append(np.array(fi))
+        for r in raw:
+            if r[0] < old_t:
+                # Start new trajectory
+                q.append(np.array(qi))
+                qi = list()
+                if has_f:
+                    f.append(np.array(fi))
+                    fi = list()
+            qi.append(r[1])
+            if has_f:
+                fi.append(r[2])
+            old_t = r[0]
 
+        # Add last trajectory
+        q.append(np.array(qi))
+        if has_f:
+            f.append(np.array(fi))
+    if not has_f:
+        f = None
     return q, f
 
 
