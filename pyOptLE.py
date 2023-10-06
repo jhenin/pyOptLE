@@ -31,11 +31,11 @@ def overdamped_Langevin(n, N, dt, beta = 1, D = .1, nablaV = nablaV_harm):
     # Start out of equilibrium
     x = np.zeros([n, N])
 
-    x[:,0] = np.zeros(n) + np.random.normal(0, np.sqrt(2.*D*dt), size=n)
+    x[:,0] = np.zeros(n)
+
     for t in range(1,N):
         x[:,t] = x[:,t-1] - beta * D * nablaV(x[:,t-1]) * dt + np.random.normal(0, np.sqrt(2.*D*dt), size=n)
     return x
-
 
 def load_traj(filenames):
     # TODO handle case of separate traj files
@@ -88,7 +88,7 @@ def history(res):
     history.nsteps += 1
 
 
-def optimize_model(initial_params, knots, q, f=None, dt=1., T=300., RT=None):
+def optimize_model(initial_params, knots, q, f=None, dt=1., T=300., RT=None, use_midpoint=False):
     '''Optimize an OptLE model given a trajectory.
     This assumes Overdamped Langevin dynamics.
     It uses an order-1 development of the short-term propagator.
@@ -117,7 +117,7 @@ def optimize_model(initial_params, knots, q, f=None, dt=1., T=300., RT=None):
 
     print("Pre-processing trajectories...")
     start_time = time.time()
-    traj = preprocess_traj(q, knots)
+    traj = preprocess_traj(q, knots, use_midpoint)
     print("Done in %.3f seconds" % (time.time() - start_time))
 
     if f is None:
@@ -147,7 +147,7 @@ def optimize_model(initial_params, knots, q, f=None, dt=1., T=300., RT=None):
     return result, history.opt
 
 
-def preprocess_traj(q, knots):
+def preprocess_traj(q, knots, use_midpoint = False):
     '''Preprocess colvar trajectory with a given grid for faster model optimization
 
     Args:
@@ -157,14 +157,25 @@ def preprocess_traj(q, knots):
     Returns:
         traj (numba types list): list of tuples (bin indices, bin positions, displacements)
     '''
+
+    # TODO: enable subsampling by *averaging* biasing force in interval
+    # Then run inputting higher-res trajectories
+
     traj = list()
 
     for qi in q:
         deltaq = qi[1:] - qi[:-1]
 
+        if use_midpoint:
+            # Use mid point of each interval
+            # Implies a "leapfrog-style" integrator that is not really used for overdamped LE
+            ref_q = 0.5 * (qi[:-1] + qi[1:])
+        else:
+            # Truncate last traj point to match deltaq array
+            ref_q = qi[:-1]
+
         # bin index on possibly irregular grid
-        # Truncate last traj point to match deltaq
-        idx = np.searchsorted(knots, qi[:-1])
+        idx = np.searchsorted(knots,ref_q)
 
         assert (idx > 0).all() and (idx < len(knots)).all(), 'Out-of-bounds point(s) in trajectory\n'
         # # Other option: fold back out-of-bounds points - introduces biases
